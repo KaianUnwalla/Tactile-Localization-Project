@@ -15,7 +15,6 @@ kaian_theme <- function(base_size = base_size){
           plot.caption = element_text(hjust=0)
     )
 }
-theme_set(kaian_theme(base_size = 20))
 
 Pivot <- function(alldata1){ 
   #This takes the raw TOJ data and summarizes it for each participant

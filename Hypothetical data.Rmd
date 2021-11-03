@@ -1,0 +1,113 @@
+---
+title: Hypothetical crossed-hands data
+author: "Kaian Unwalla"
+date: "November, 2021"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+This code creates hypothetical experiment data. The output file contains 11 columns.
+- Column 1: Participant number. You can change the number of participants through the variable numParticipants. 
+- Column 2: Hands. This takes on two values (crossed and uncrossed). These are the two posture that participants use throughout the experiments
+- Column 3: Condition. Here I have labeled the conditions A and B, and created different values for the two conditions. 
+- Column 4: SOA. This is the time difference between the two tactile vibrations. Negative indicates the vibration was presented to the left hand first. The task is easier at longer SOAs. Here I have used 6 values (± 0.4s, ± 0.2s, ± 0.05s)
+- Column 5: Trial. This determines the number of trials a participant sees in each hand posture by condition by SOA. I have set this to 30 as this would be a standard 1 hour experiment
+- Column 6: wInt. This is the weight placed on internal information.
+- Column 7: wExt. This is the weight placed on external information. wInt + wExt determines the slope of the uncrossed line.The slope of the crossed line is determined by wInt - wExt. 
+- Column 8: taskInt. This is the change in the internal information for condition B. An increase in the internal information would predict better crossed and uncrossed performance. 
+- Column 9: taskExt. This is the change in external information for condition B. An increase in the external information would predict better uncrossed performance but worse crossed performance. 
+- Column 10: p. This is the hypothesized probability of answering right-hand first determined by the logistic equation. 
+- Column 11: Actual. I used a binomial equation with p to decide whether the participant answered 'right hand' on each trial (1 indicates right-first, 0 indicates left-first)
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align = 'center', fig.path='Figs/',
+                      echo=FALSE, warning=FALSE, message=FALSE, include = TRUE)
+```
+
+```{r, libraries}
+rm(list=ls())
+library(tidyverse)
+library(tictoc)
+library(kableExtra)
+library(gridExtra)
+library(ggpubr)
+devtools::source_gist("524eade46135f6348140") #for stat_smooth_func (calculating slope of regression line)
+
+source("Graph functions.R")
+source("Model functions.R")
+
+theme_set(kaian_theme(base_size = 10))
+
+
+time<-format(Sys.time(),"%b%d_%H%M%S")
+path = "Data/"
+```
+
+```{r, create_hypothetical_crossed-hands_data}
+#Choose values of parameters
+numParticipants = 20
+SOA <- c(-0.4,-0.2,-0.05,0.05,0.2,0.4)
+numTrials <- 30
+
+#Can change the mean weight and sd for the participants
+wInt = 10
+wExt = 7
+sdInt = 1
+sdExt = 1
+
+#Choose how much of a change should be expected for each condition. 1 indicates this value will not change across conditions
+taskInt = 1
+taskExt = 1.5
+sdtaskInt = 0.3
+sdtaskExt = 0.3
+
+#Creates the participant data. This first creates the dataframe with all the rows. Then selects weight parameters for each participant, and then calculates the hypothesis based on those chosen parameters. 
+alldata1 <- expand.grid(Participant = c(1:numParticipants),
+                  Hands = c('Crossed','Uncrossed'),
+                  Condition = c('A','B'),
+                  SOA = SOA,
+                  Trial = c(1:numTrials)) %>% 
+  nest(data = -c(Participant)) %>% 
+  mutate(wInt = rnorm(numParticipants, wInt, sdInt), wExt = rnorm(numParticipants, wExt, sdExt),
+         taskInt = rnorm(1, taskInt, sdtaskInt), taskExt = rnorm(1, taskExt, sdtaskExt)) %>% 
+  unnest(cols = c(data)) %>% 
+  mutate(wInt = ifelse(Condition == "A", wInt, wInt*taskInt), wExt = ifelse(Condition == "A", wExt, wExt*taskExt),
+         p = genHypothesisMLE(wInt, wExt, Hands, SOA, numTrials))
+alldata1$Actual <-  rbinom(nrow(alldata1),1,alldata1$p)
+
+  
+#save the created participant data
+write.table(alldata1, paste(path,"Raw Data ",time,".txt", sep = ""), sep = '\t', row.names = F, col.names = T)
+```
+
+You can use this code here to create an overall graph of participant performance. You can change the values of wInt, wExt, taskInt, taskExt and then see how it changes overall performance
+```{r overall_graph}
+#plots overall data separated by hand posture and condition
+Pivot_overall(alldata1) %>% 
+  ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, fill = Condition))+
+  geom_errorbar(aes(ymin=Data-SE,ymax=Data+SE),width=.01, linetype = 'solid')+
+  geom_line(size=0.5)+geom_point(size=5, shape=21)+
+  scale_linetype_manual(values = c('dashed','solid'))+
+  scale_fill_manual(values = c("grey", "grey25"))+
+  scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
+  scale_y_continuous(breaks=seq(0,1,0.5))+
+  ylab("Proportion of 'Right-First' Responses")+xlab("SOA (s)")
+```
+
+This code here plots the individual participants, so you can see what is happening for each participant separately
+```{r, data_graphs}
+#plots line graph, with performance separated by hand posture and condition for each participant
+Pivot(alldata1) %>%
+  ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, color = Condition))+
+  geom_line()+
+  scale_linetype_manual(values = c('dashed','solid'))+
+  scale_color_manual(values = c("grey25", "grey"))+
+  scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
+  scale_y_continuous(breaks=seq(0,1,0.5))+
+  ylab('Proportion of Right First Responses')+xlab("SOA (ms)")+
+  facet_wrap(~Participant)
+```
+

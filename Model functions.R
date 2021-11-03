@@ -7,7 +7,7 @@ Pivot <- function(alldata1){
   #This takes the raw TOJ data and summarizes it for each participant
   pivot_full<-alldata1 %>% 
     filter(Actual>=0) %>% #remove timeouts
-    group_by(Participant,Sex,Condition,Hands,SOA) %>%
+    group_by(Participant,Condition,Hands,SOA) %>%
     summarise(numTrials = length(Actual), numRF = sum(Actual), Data = mean(Actual)) %>% 
     ungroup()
   return(pivot_full)
@@ -49,7 +49,7 @@ genHypothesis <- function(wInt,wExt,SOA,taskInt,taskExt, numTrialsCondition){
     return(x)
   }
   
-  #creates a list of the hypothesized probabibility of the hypothesis
+  #creates a list of the hypothesized probability of the hypothesis
   p <-c()
   p <- sapply(SOA, hyp, t=t)
   p <- do.call(c, p)
@@ -142,11 +142,11 @@ max.MLE <- function(Normalized_likelihoods){
   return(Max_likelihoods)
 }
 
-genHypothesisMLE <- function(wInt,wExt,Hands,SOA,numTrialsCondition, Condition=NULL){
+genHypothesisMLE <- function(wInt,wExt,Hands,SOA,numTrialsCondition){
   #this takes the chosen internal and external weight and creates the psychometric curve for the crossed and uncrossed posture at each SOA.
   #uncrossed: sum of the weights, crossed: difference between weights
   
-  #The data were sampled across SOA while the hands and task paraemeter were varied.
+  #The data were sampled across SOA while the hands and task parameter were varied.
   #Condition: Allocentric and Somatotopic
   #wInt, wExt --> the weight applied to the two reference frames in the model.
   #SOA --> a list of values sampled in the experiment (coded in seconds)
