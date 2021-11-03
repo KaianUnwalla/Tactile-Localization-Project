@@ -1,0 +1,21 @@
+Response Demands
+
+Nov02_214108
+
+Total Number of Iterations: 1
+Trials per Iteration: 25000
+Burn In: 5000
+
+Parameter Initilization Range
+participant weights: 2 - 20
+population weights: 2 - 20
+population sigma: 1 - 8
+task parameter: 0.5 - 2.5
+
+Proposal Distribution Sigmas
+participant weights: 0.14
+population weights: 0.14
+population sigma: 0.06
+task parameter: 0.01
+
+Acceptance Rate (after burn-in): 0.4

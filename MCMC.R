@@ -1,0 +1,304 @@
+
+#Clear workspace and save the time
+rm(list=ls())
+time<-format(Sys.time(),"%b%d_%H%M%S")
+
+#Load libraries
+library(tidyverse)
+library(tictoc)
+library(truncnorm)
+library(tidyfst)
+
+#Load functions
+source("MCMC functions.R")
+path = 'Data/'
+
+
+##################Create some hypothetical crossed-hands data
+
+#Choose values of parameters
+numParticipants = 20 
+SOA <- c(-0.4,-0.2,-0.05,0.05,0.2,0.4)
+
+#Can change the mean weight and sd for the participants
+wInt_current <- c(P = rnorm(numParticipants,20,1)) 
+wExt_current <- c(P = rnorm(numParticipants,14,1))
+
+#Choose how much of a change should be expected for each condition
+taskInt = 1
+taskExt = 3
+
+#calculates hypothesized probabilities
+p <- genHypothesis(wInt_current, wExt_current, SOA, taskInt, taskExt, 30) #30 is just based on standard size of participant data
+
+
+alldata1 <- expand.grid(Participant = c(1:numParticipants),
+                  Hands = c('Crossed','Uncrossed'),
+                  Condition = c('A','B'),
+                  SOA = SOA,
+                  Trial = c(1:30)) %>% 
+  nest(data = c(Trial)) %>% 
+  add_column(p) %>% 
+  unnest() %>% 
+  group_by(Participant) %>% 
+  mutate(Actual = rbinom(720,1,p))
+  
+#save the created participant data
+write.table(alldata1, "Data/Raw Data.txt", sep = '\t', row.names = F, col.names = T)
+
+
+########## MCMC
+
+# Set MCMC variables
+runMLE = FALSE
+runPPMC = FALSE
+numIterations = 1 #number of repetitions of the MCMC chain
+numMCMC = 25000 #number of iterations in the MCMC chain.  
+burnIn = 5000 #amount to be removed 
+
+#proposal distribution standard deviation parameters
+wsd <- 0.14 #proposed distribution for participant weights
+musd <- 0.14 #proposed distribution for population weights
+sigma_sd <- 0.06 #population sigma proposal distribution
+task_sd <- 0.01 #proposal distribution for the task parameter
+
+
+#### Generate initial hypothesis
+
+#summarize the data
+pivot_full<-alldata1 %>% 
+  group_by(SOA,Condition,Hands,Participant) %>%
+  summarise(numTrials = length(Actual), numRF = sum(Actual), Data = mean(Actual)) %>% 
+  ungroup()
+
+#determines number of levels of various experiment factors
+numParticipants = length(unique(alldata1$Participant))
+numSOA = length(unique(alldata1$SOA))
+numConditions = length(unique(alldata1$Condition))
+numPostures = length(unique(alldata1$Hands))
+numTrialsCondition = nrow(alldata1)/numParticipants/numSOA/numConditions/numPostures
+
+SOA <- unique(pivot_full$SOA) #levels of SOAs for hypothesis
+PCD_easy <- pivot_full %>% select(-c(numRF,numTrials,Sex,Data)) #for PPMC
+
+#If set to TRUE then will calculate the maximum likelihood estimated weights as well
+if(runMLE){
+  NormMLE <- calc.MLE(alldata1, 0, 40, 0.5)
+  MLE <- max.MLE(NormMLE)
+  #Saves dataframes as .rds data files
+  # save(Likelihoods, file = paste(path,"/",Experiment," Likelihoods.rds", sep=""), compress = "xz")
+  save(NormMLE, file = paste(path,"/",Experiment," NormLikelihoods.rds", sep=""), compress = "xz")
+  save(MLE, file = paste(path,"/",Experiment," MaxLikelihoods.rds", sep=""), compress = "xz")
+}
+
+#create empty lists to later save with overall outputted data
+popParamsAll <- list()
+trialInfoAll <- list()
+wIntAll <- list()
+wExtAll <- list()
+timer <- list()
+
+
+for(i in 1:numIterations){
+  
+  #emtpy lists to save chosen parameters on each trial
+  saved_popHyps <-list()
+  saved_trial <- list()
+  saved_wInt <- list()
+  saved_wExt <- list()
+  saved_PPMC <- list()
+  
+  
+  #initial parameters for MCMC
+  minWeight = 2
+  maxWeight = 20
+  minSD = 1
+  maxSD = 8
+  minTask = 0.5
+  maxTask = 2.5
+  wInt_current <- c(P = runif(numParticipants,minWeight,maxWeight))
+  wExt_current <- c(P = runif(numParticipants,minWeight,maxWeight))
+  
+  hyp_current_pop <- c(Internal = runif(1,minWeight,maxWeight),
+                       External = runif(1,minWeight,maxWeight),
+                       sdInt =runif(1,minSD,maxSD),
+                       sdExt = runif(1,minSD,maxSD),
+                       taskInt = runif(1,minTask,maxTask),
+                       taskExt = runif(1,minTask,maxTask)) 
+  
+  #calculating prior probability using a truncated normal distribution for the participants, 
+  #and uniform prior for population weights
+  prior_current <- sum(log(dtruncnorm(wInt_current, 0, Inf, hyp_current_pop[1], hyp_current_pop[3])),
+                       log(dtruncnorm(wExt_current, 0, Inf, hyp_current_pop[2], hyp_current_pop[4])),
+                       log(ifelse(dunif(hyp_current_pop[1], 0,100) > 0, 1, 0)), #population internal
+                       log(ifelse(dunif(hyp_current_pop[2], 0,100) > 0, 1, 0)), #population external  
+                       log(ifelse(dunif(hyp_current_pop[5], 0,10) > 0, 1, 0)), #internal task parameter
+                       log(ifelse(dunif(hyp_current_pop[6], 0,10) > 0, 1, 0))) #external task parameter 
+  
+  
+  #calculates hypothesized probabilities
+  hypothesis_current <- genHypothesis(wInt_current, wExt_current, 
+                                      SOA, 
+                                      hyp_current_pop[5], hyp_current_pop[6], 
+                                      numTrialsCondition)
+  
+  #calculates likelihood of the hypothesis
+  likelihood_current <- sum(compLikelihood(hypothesis_current, pivot_full$numTrials, pivot_full$numRF))
+
+  #calculates numerator
+  numerator_current <- prior_current + likelihood_current
+  
+  
+  #Comparison point
+  for(count in 1:numMCMC){
+    
+    #proposed parameters for MCMC
+    wInt_propose <- c(P = rnorm(numParticipants, mean = wInt_current, sd = wsd))
+    wExt_propose <- c(P = rnorm(numParticipants, mean = wExt_current, sd = wsd))
+    
+    hyp_propose_pop <- c(Internal = rnorm(1,mean=hyp_current_pop[1],sd=musd),
+                         External = rnorm(1,mean=hyp_current_pop[2],sd=musd),
+                         sdInt =rnorm(1,mean=hyp_current_pop[3],sd=sigma_sd),
+                         sdExt = rnorm(1,mean=hyp_current_pop[4],sd=sigma_sd),
+                         taskInt = rnorm(1,mean=hyp_current_pop[5],sd=task_sd),
+                         taskExt = rnorm(1,mean=hyp_current_pop[6],sd=task_sd))
+    
+    #calculating proposed numerator same as initial hypothesis
+    prior_propose <- sum(log(dtruncnorm(wInt_propose, 0, Inf, hyp_propose_pop[1], hyp_propose_pop[3])),
+                         log(dtruncnorm(wExt_propose, 0, Inf, hyp_propose_pop[2], hyp_propose_pop[4])),
+                         log(ifelse(dunif(hyp_propose_pop[1], 0,100) > 0, 1, 0)),
+                         log(ifelse(dunif(hyp_propose_pop[2], 0,100) > 0, 1, 0)),                       
+                         log(ifelse(dunif(hyp_propose_pop[5], 0,10) > 0, 1, 0)),
+                         log(ifelse(dunif(hyp_propose_pop[6], 0,10) > 0, 1, 0))) 
+    
+    hypothesis_propose <-genHypothesis(wInt_propose, wExt_propose,
+                                       SOA,
+                                       hyp_propose_pop[5], hyp_propose_pop[6], 
+                                       numTrialsCondition)
+    
+    likelihood_propose <- sum(compLikelihood(hypothesis_propose, pivot_full$numTrials, pivot_full$numRF))
+    
+    numerator_propose <- prior_propose + likelihood_propose
+    
+    
+    #comparing hypotheses
+    ratio = exp(numerator_propose - numerator_current)
+    
+    probability <- ifelse(ratio > 1, 1, rbinom(1,1,ratio)) 
+    #if the p(comparison) > p(original) then  probability of jumping = 1
+    #if p(comparison) < p(original) then jump with probably = ratio
+    #so, jump if ratio > 1, OR if coin flip favours a jump
+    if(probability){
+      #overwrites all the current lists with the proposed lists
+      wInt_current <- wInt_propose
+      wExt_current <- wExt_propose
+      hyp_current_pop <- hyp_propose_pop
+      prior_current <- prior_propose
+      hypothesis_current <- hypothesis_propose
+      likelihood_current <- likelihood_propose
+      numerator_current <- numerator_propose
+      result = 'Jump'
+    } else{
+      result <- 'Stay'
+    }
+    
+    #PPMC
+    #run only on the final MCMC run, and if runPPMC is set to TRUE
+    if(runPPMC && i == numIterations){
+      allPPMC<-PPMC(PCD_easy, pRfirst)
+      saved_PPMC[[count]] <- allPPMC
+    }
+    
+    #Putting all the trial data in 1 list
+    trial_info <- c(prior = prior_current, likelihood = likelihood_current, numerator = numerator_current, result = result)
+    
+    #adds parameters of the more probable hypothesis on each trial to list
+    saved_popHyps[[count]] <- hyp_current_pop
+    saved_trial[[count]] <- trial_info
+    saved_wInt[[count]] <- wInt_current
+    saved_wExt[[count]] <- wExt_current
+    
+  }
+  
+  #Converting saved data lists to tibble
+  saved_popHyps <- do.call(bind_rows, saved_popHyps) %>% 
+    mutate(Iteration = i, Trial = 1:numMCMC)
+  saved_trial <- do.call(bind_rows, saved_trial) %>% 
+    mutate(Iteration = i, Trial = 1:numMCMC)
+  saved_wInt <- do.call(bind_rows, saved_wInt) %>%
+    mutate(Iteration = i, Trial = 1:numMCMC)
+  saved_wExt <- do.call(bind_rows, saved_wExt) %>%
+    mutate(Iteration = i, Trial = 1:numMCMC)
+  
+  #Saving each iteration as a list
+  popParamsAll[[i]] <- saved_popHyps
+  trialInfoAll[[i]] <- saved_trial
+  wIntAll[[i]] <- saved_wInt
+  wExtAll[[i]] <- saved_wExt
+  
+  
+}
+
+
+#Converting saved data of each iteration to tibble
+popParamsAll <- do.call(bind_rows,popParamsAll) 
+trialInfoAll <- do.call(bind_rows, trialInfoAll)
+wIntAll <- do.call(bind_rows, wIntAll) %>%
+  mutate(RF = "Internal")
+wExtAll <- do.call(bind_rows, wExtAll) %>%
+  mutate(RF = "External")
+
+#joining participant internal and external weights together
+partParamsAll <- rbind(wIntAll,wExtAll) 
+colNames <- c(1:numParticipants,"Iteration","Trial","RF")
+names(partParamsAll)<-colNames
+partParamsAll <- partParamsAll %>% 
+  pivot_longer(names_to = "Participant", values_to = "Somatotopic", cols = 1:numParticipants)
+
+
+saveRDS(popParamsAll, "Data/Population Parameters.rds", compress = "xz")
+saveRDS(trialInfoAll, "Data/Trial Info.rds", compress = "xz")
+saveRDS(partParamsAll, "Data/Participant Parameters.rds", compress = "xz")
+
+if(runPPMC && i == numIterations){
+  PPMC <- do.call(bind_rows, saved_PPMC) %>% 
+    mutate(Iteration = i, Trial = 1:numMCMC)
+  saveRDS(PPMC, "Data/PPMC.rds", compress = "xz")
+}
+
+
+Acceptance <- trialInfoAll %>% 
+  filter(Trial > burnIn) %>% 
+  group_by(Iteration) %>% 
+  mutate(acceptance = ifelse(result == 'Jump', 1, 0)) %>% 
+  summarise(Acceptance = round(mean(acceptance),2)) 
+AR = c(Acceptance$Acceptance)
+
+
+runDetails<-file(paste("Data/run details.txt", sep=""))
+writeLines(c(paste("Response Demands"),
+             "",
+             time,
+             "",
+             paste("Total Number of Iterations:", numIterations),
+             paste("Trials per Iteration:", numMCMC),
+             paste("Burn In:", burnIn),
+             "",
+             "Parameter Initilization Range", 
+             paste("participant weights:", minWeight, "-", maxWeight), 
+             paste("population weights:", minWeight, "-", maxWeight), 
+             paste("population sigma:", minSD, "-", maxSD), 
+             paste("task parameter:", minTask,"-", maxTask),
+             "",
+             "Proposal Distribution Sigmas", 
+             paste("participant weights:", wsd), 
+             paste("population weights:", musd), 
+             paste("population sigma:", sigma_sd), 
+             paste("task parameter:", task_sd),
+             "",
+             paste("Acceptance Rate (after burn-in):", AR)
+), runDetails)
+close(runDetails)
+
+
+

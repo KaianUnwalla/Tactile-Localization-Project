@@ -1,0 +1,4 @@
+load("/Users/kaianunwalla/Sync/Github Portfolio/Test/Data/ Population Parameters.rds")
+load("/Users/kaianunwalla/Sync/Github Portfolio/Test/Data/ Participant Parameters.rds")
+load("/Users/kaianunwalla/Sync/Github Portfolio/Test/Data/Participant Parameters.rds")
+load("/Users/kaianunwalla/Sync/Github Portfolio/Test/Data/Trial Info.rds")
