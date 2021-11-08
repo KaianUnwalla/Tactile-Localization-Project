@@ -1,13 +1,19 @@
 ---
-title: Exploring reference frame integration using response demands in a tactile TOJ
-  task - Figures in Paper
-author: "Kaian Unwalla, Daniel Goldreich, & David I. Shore"
-date: "September, 2020"
+title: Participant Specific Model analyses to crossed-hands data
+author: "Kaian Unwalla"
+date: "November, 2021"
 output:
   word_document: default
   pdf_document: default
   html_document: default
 ---
+
+This code uses a Bayesian maximum likelihood estimation to separately estimate the internal and external weights for each participant. The model works by finding the most likely slope for each psychometric curve. 
+Based on the prevailing theory for the crossed-hands deficit the model calculates the slopes for each condition as following:
+- For the uncrossed curves: the slope is estimated as internal weight + external weight
+- For the crossed curves: the slope is estimated as internal weight - external weight
+This results in a single internal weight and external weight that is estimating the slope for both the crossed and uncrossed curves. 
+- For more detail see: Unwalla, K., Goldreich, D., & Shore, D. I. (2021). Exploring reference frame integration using response demands in a tactile temporal-order judgement task. Multisensory Research, 34(8), 807-838.
 
 ```{r global_options, include=FALSE}
 knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align = 'center', fig.path='Figs/',
@@ -17,462 +23,95 @@ knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align = 'center', fig.path
 ```{r, libraries}
 rm(list=ls())
 library(tidyverse)
-library(tictoc)
-library(kableExtra)
-library(gridExtra)
-library(ggpubr)
-devtools::source_gist("524eade46135f6348140") #for stat_smooth_func (calculating slope of regression line)
+library(tidyfst)
 
-source("Graph functions.R")
 source("Model functions.R")
 
 
 time<-format(Sys.time(),"%b%d_%H%M%S")
 
 path = 'Data/'
+alldata1 <- read.table(paste(path,'Test Data.txt', sep = ""), header = T)
+
+saveData = TRUE
 
 ```
 
-```{r, create hypothetical crossed-hands data}
+```{r, participant-specific_model}
+#choose the range of weights you want tested
+minWeight = 0 
+maxWeight = 20
 
-#Choose values of parameters
-numParticipants = 20 
-SOA <- c(-0.4,-0.2,-0.05,0.05,0.2,0.4)
+#Calculates the normalized likelihood values for each internal and external weight combination
+NormMLE <- calc.MLE(alldata1, minWeight, maxWeight, 0.5)
 
-#Can change the mean weight and sd for the participants
-wInt_current <- c(P = rnorm(numParticipants,20,1)) 
-wExt_current <- c(P = rnorm(numParticipants,14,1))
+#Calculates the maximum likelihood weight pair
+MLE <- max.MLE(NormMLE)
 
-#Choose how much of a change should be expected for each condition
-taskInt = 1
-taskExt = 3
-
-#calculates hypothesized probabilities
-p <- genHypothesis(wInt_current, wExt_current, SOA, taskInt, taskExt, 30) #30 is just based on standard size of participant data
-
-
-alldata1 <- expand.grid(Participant = c(1:numParticipants),
-                  Hands = c('Crossed','Uncrossed'),
-                  Condition = c('A','B'),
-                  SOA = SOA,
-                  Trial = c(1:30)) %>% 
-  nest(data = c(Trial)) %>% 
-  add_column(p) %>% 
-  unnest() %>% 
-  group_by(Participant) %>% 
-  mutate(Actual = rbinom(720,1,p))
-  
-#save the created participant data
-write.table(alldata1, "Data/Raw Data.txt", sep = '\t', row.names = F, col.names = T)
-```
-
-
-```{r}
-
-########## MCMC
-
-# Set MCMC variables
-runMLE = FALSE
-runPPMC = FALSE
-numIterations = 1 #number of repetitions of the MCMC chain
-numMCMC = 25000 #number of iterations in the MCMC chain.  
-burnIn = 5000 #amount to be removed 
-
-#proposal distribution standard deviation parameters
-wsd <- 0.14 #proposed distribution for participant weights
-musd <- 0.14 #proposed distribution for population weights
-sigma_sd <- 0.06 #population sigma proposal distribution
-task_sd <- 0.01 #proposal distribution for the task parameter
-
-
-#### Generate initial hypothesis
-
-#summarize the data
-pivot_full<-alldata1 %>% 
-  group_by(SOA,Condition,Hands,Participant) %>%
-  summarise(numTrials = length(Actual), numRF = sum(Actual), Data = mean(Actual)) %>% 
-  ungroup()
-
-#determines number of levels of various experiment factors
-numParticipants = length(unique(alldata1$Participant))
-numSOA = length(unique(alldata1$SOA))
-numConditions = length(unique(alldata1$Condition))
-numPostures = length(unique(alldata1$Hands))
-numTrialsCondition = nrow(alldata1)/numParticipants/numSOA/numConditions/numPostures
-
-SOA <- unique(pivot_full$SOA) #levels of SOAs for hypothesis
-PCD_easy <- pivot_full %>% select(-c(numRF,numTrials,Data)) #for PPMC
-
-#If set to TRUE then will calculate the maximum likelihood estimated weights as well
-if(runMLE){
-  NormMLE <- calc.MLE(alldata1, 0, 40, 0.5)
-  MLE <- max.MLE(NormMLE)
-  #Saves dataframes as .rds data files
-  # save(Likelihoods, file = paste(path,"/",Experiment," Likelihoods.rds", sep=""), compress = "xz")
-  save(NormMLE, file = paste(path,"/",Experiment," NormLikelihoods.rds", sep=""), compress = "xz")
-  save(MLE, file = paste(path,"/",Experiment," MaxLikelihoods.rds", sep=""), compress = "xz")
+if(saveData){
+  saveRDS(NormMLE, file = paste(path,"NormLikelihoods.rds", sep=""), compress = "xz")
+  saveRDS(MLE, file = paste(path,"MaxLikelihoods.rds", sep=""), compress = "xz")
 }
-
-#create empty lists to later save with overall outputted data
-popParamsAll <- list()
-trialInfoAll <- list()
-wIntAll <- list()
-wExtAll <- list()
-timer <- list()
-
-
-for(i in 1:numIterations){
-  
-  #emtpy lists to save chosen parameters on each trial
-  saved_popHyps <-list()
-  saved_trial <- list()
-  saved_wInt <- list()
-  saved_wExt <- list()
-  saved_PPMC <- list()
-  
-  
-  #initial parameters for MCMC
-  minWeight = 2
-  maxWeight = 20
-  minSD = 1
-  maxSD = 8
-  minTask = 0.5
-  maxTask = 2.5
-  wInt_current <- c(P = runif(numParticipants,minWeight,maxWeight))
-  wExt_current <- c(P = runif(numParticipants,minWeight,maxWeight))
-  
-  hyp_current_pop <- c(Internal = runif(1,minWeight,maxWeight),
-                       External = runif(1,minWeight,maxWeight),
-                       sdInt =runif(1,minSD,maxSD),
-                       sdExt = runif(1,minSD,maxSD),
-                       taskInt = runif(1,minTask,maxTask),
-                       taskExt = runif(1,minTask,maxTask)) 
-  
-  #calculating prior probability using a truncated normal distribution for the participants, 
-  #and uniform prior for population weights
-  prior_current <- sum(log(dtruncnorm(wInt_current, 0, Inf, hyp_current_pop[1], hyp_current_pop[3])),
-                       log(dtruncnorm(wExt_current, 0, Inf, hyp_current_pop[2], hyp_current_pop[4])),
-                       log(ifelse(dunif(hyp_current_pop[1], 0,100) > 0, 1, 0)), #population internal
-                       log(ifelse(dunif(hyp_current_pop[2], 0,100) > 0, 1, 0)), #population external  
-                       log(ifelse(dunif(hyp_current_pop[5], 0,10) > 0, 1, 0)), #internal task parameter
-                       log(ifelse(dunif(hyp_current_pop[6], 0,10) > 0, 1, 0))) #external task parameter 
-  
-  
-  #calculates hypothesized probabilities
-  hypothesis_current <- genHypothesis(wInt_current, wExt_current, 
-                                      SOA, 
-                                      hyp_current_pop[5], hyp_current_pop[6], 
-                                      numTrialsCondition)
-  
-  #calculates likelihood of the hypothesis
-  likelihood_current <- sum(compLikelihood(hypothesis_current, pivot_full$numTrials, pivot_full$numRF))
-
-  #calculates numerator
-  numerator_current <- prior_current + likelihood_current
-  
-  
-  #Comparison point
-  for(count in 1:numMCMC){
-    
-    #proposed parameters for MCMC
-    wInt_propose <- c(P = rnorm(numParticipants, mean = wInt_current, sd = wsd))
-    wExt_propose <- c(P = rnorm(numParticipants, mean = wExt_current, sd = wsd))
-    
-    hyp_propose_pop <- c(Internal = rnorm(1,mean=hyp_current_pop[1],sd=musd),
-                         External = rnorm(1,mean=hyp_current_pop[2],sd=musd),
-                         sdInt =rnorm(1,mean=hyp_current_pop[3],sd=sigma_sd),
-                         sdExt = rnorm(1,mean=hyp_current_pop[4],sd=sigma_sd),
-                         taskInt = rnorm(1,mean=hyp_current_pop[5],sd=task_sd),
-                         taskExt = rnorm(1,mean=hyp_current_pop[6],sd=task_sd))
-    
-    #calculating proposed numerator same as initial hypothesis
-    prior_propose <- sum(log(dtruncnorm(wInt_propose, 0, Inf, hyp_propose_pop[1], hyp_propose_pop[3])),
-                         log(dtruncnorm(wExt_propose, 0, Inf, hyp_propose_pop[2], hyp_propose_pop[4])),
-                         log(ifelse(dunif(hyp_propose_pop[1], 0,100) > 0, 1, 0)),
-                         log(ifelse(dunif(hyp_propose_pop[2], 0,100) > 0, 1, 0)),                       
-                         log(ifelse(dunif(hyp_propose_pop[5], 0,10) > 0, 1, 0)),
-                         log(ifelse(dunif(hyp_propose_pop[6], 0,10) > 0, 1, 0))) 
-    
-    hypothesis_propose <-genHypothesis(wInt_propose, wExt_propose,
-                                       SOA,
-                                       hyp_propose_pop[5], hyp_propose_pop[6], 
-                                       numTrialsCondition)
-    
-    likelihood_propose <- sum(compLikelihood(hypothesis_propose, pivot_full$numTrials, pivot_full$numRF))
-    
-    numerator_propose <- prior_propose + likelihood_propose
-    
-    
-    #comparing hypotheses
-    ratio = exp(numerator_propose - numerator_current)
-    
-    probability <- ifelse(ratio > 1, 1, rbinom(1,1,ratio)) 
-    #if the p(comparison) > p(original) then  probability of jumping = 1
-    #if p(comparison) < p(original) then jump with probably = ratio
-    #so, jump if ratio > 1, OR if coin flip favours a jump
-    if(probability){
-      #overwrites all the current lists with the proposed lists
-      wInt_current <- wInt_propose
-      wExt_current <- wExt_propose
-      hyp_current_pop <- hyp_propose_pop
-      prior_current <- prior_propose
-      hypothesis_current <- hypothesis_propose
-      likelihood_current <- likelihood_propose
-      numerator_current <- numerator_propose
-      result = 'Jump'
-    } else{
-      result <- 'Stay'
-    }
-    
-    #PPMC
-    #run only on the final MCMC run, and if runPPMC is set to TRUE
-    if(runPPMC && i == numIterations){
-      allPPMC<-PPMC(PCD_easy, pRfirst)
-      saved_PPMC[[count]] <- allPPMC
-    }
-    
-    #Putting all the trial data in 1 list
-    trial_info <- c(prior = prior_current, likelihood = likelihood_current, numerator = numerator_current, result = result)
-    
-    #adds parameters of the more probable hypothesis on each trial to list
-    saved_popHyps[[count]] <- hyp_current_pop
-    saved_trial[[count]] <- trial_info
-    saved_wInt[[count]] <- wInt_current
-    saved_wExt[[count]] <- wExt_current
-    
-  }
-  
-  #Converting saved data lists to tibble
-  saved_popHyps <- do.call(bind_rows, saved_popHyps) %>% 
-    mutate(Iteration = i, Trial = 1:numMCMC)
-  saved_trial <- do.call(bind_rows, saved_trial) %>% 
-    mutate(Iteration = i, Trial = 1:numMCMC)
-  saved_wInt <- do.call(bind_rows, saved_wInt) %>%
-    mutate(Iteration = i, Trial = 1:numMCMC)
-  saved_wExt <- do.call(bind_rows, saved_wExt) %>%
-    mutate(Iteration = i, Trial = 1:numMCMC)
-  
-  #Saving each iteration as a list
-  popParamsAll[[i]] <- saved_popHyps
-  trialInfoAll[[i]] <- saved_trial
-  wIntAll[[i]] <- saved_wInt
-  wExtAll[[i]] <- saved_wExt
-  
-  
-}
-
-
-#Converting saved data of each iteration to tibble
-popParamsAll <- do.call(bind_rows,popParamsAll) 
-trialInfoAll <- do.call(bind_rows, trialInfoAll)
-wIntAll <- do.call(bind_rows, wIntAll) %>%
-  mutate(RF = "Internal")
-wExtAll <- do.call(bind_rows, wExtAll) %>%
-  mutate(RF = "External")
-
-#joining participant internal and external weights together
-partParamsAll <- rbind(wIntAll,wExtAll) 
-colNames <- c(1:numParticipants,"Iteration","Trial","RF")
-names(partParamsAll)<-colNames
-partParamsAll <- partParamsAll %>% 
-  pivot_longer(names_to = "Participant", values_to = "Somatotopic", cols = 1:numParticipants)
-
-
-saveRDS(popParamsAll, "Data/Population Parameters.rds", compress = "xz")
-saveRDS(trialInfoAll, "Data/Trial Info.rds", compress = "xz")
-saveRDS(partParamsAll, "Data/Participant Parameters.rds", compress = "xz")
-
-if(runPPMC && i == numIterations){
-  PPMC <- do.call(bind_rows, saved_PPMC) %>% 
-    mutate(Iteration = i, Trial = 1:numMCMC)
-  saveRDS(PPMC, "Data/PPMC.rds", compress = "xz")
-}
-
-
-Acceptance <- trialInfoAll %>% 
-  filter(Trial > burnIn) %>% 
-  group_by(Iteration) %>% 
-  mutate(acceptance = ifelse(result == 'Jump', 1, 0)) %>% 
-  summarise(Acceptance = round(mean(acceptance),2)) 
-AR = c(Acceptance$Acceptance)
-
-
-runDetails<-file(paste("Data/run details.txt", sep=""))
-writeLines(c(paste("Response Demands"),
-             "",
-             time,
-             "",
-             paste("Total Number of Iterations:", numIterations),
-             paste("Trials per Iteration:", numMCMC),
-             paste("Burn In:", burnIn),
-             "",
-             "Parameter Initilization Range", 
-             paste("participant weights:", minWeight, "-", maxWeight), 
-             paste("population weights:", minWeight, "-", maxWeight), 
-             paste("population sigma:", minSD, "-", maxSD), 
-             paste("task parameter:", minTask,"-", maxTask),
-             "",
-             "Proposal Distribution Sigmas", 
-             paste("participant weights:", wsd), 
-             paste("population weights:", musd), 
-             paste("population sigma:", sigma_sd), 
-             paste("task parameter:", task_sd),
-             "",
-             paste("Acceptance Rate (after burn-in):", AR)
-), runDetails)
-close(runDetails)
-
-
-
-
 ```
 
-```{r, load_data}
-#loads in the data
-path = 'Data/'
 
-alldata1 <- read.table(paste('Data/Raw Data.txt', sep = ""), header = T)
-popParamsAll <- readRDS('Data/Population Parameters.rds') %>% filter(Trial > 5000) %>% 
-    mutate(Participant = as.integer(Participant))
-partParamsAll <- readRDS('Data/Participant Parameters.rds') %>% filter(Trial > 5000)
-trialInfoAll <- readRDS('Data/Trial Info.rds') %>% filter(Trial > 5000)
-# readRDS('Data/PPMC.rds') %>% filter(Trial > 5000)
-# readRDS('Data/MaxLikelihoods.rds')
-# readRDS('Data/NormLikelihoods.rds')
+## Visualizations
 
-
-#renames Conditions
-alldata1 <- alldata1 %>% 
-  mutate(Condition = ifelse(Condition == "Allocentric", "Spatiotopic", "Anatomical"))
-PPMC <- PPMC %>% 
-  rename(Anatomical = Somatotopic, Spatiotopic = Allocentric)
-Max_likelihoods <- Max_likelihoods %>% 
-  mutate(Condition = ifelse(Condition == "Allocentric", "Spatiotopic", "Anatomical"))
-NormMLE <- NormMLE %>% 
-  mutate(Condition = ifelse(Condition == "Allocentric", "Spatiotopic", "Anatomical"))
-
-#calculates Spatiotopic condition weights
-popParams_Condition <- popParamsAll %>% 
-  mutate(Anatomical = "Anatomical", Spatiotopic = "Spatiotopic") %>% 
-  pivot_longer(names_to = "test", values_to = "Condition", cols = c(Anatomical,Spatiotopic)) %>% 
-  select(-test) %>% 
-  mutate(Internal = ifelse(Condition == "Spatiotopic", Internal*taskInt, Internal),
-         External = ifelse(Condition == "Spatiotopic", External*taskExt, External)) 
-
-#joins participant and population data
-ParamsAll <- full_join(popParamsAll, partParamsAll) %>% 
-  rename(Anatomical = Somatotopic)
-
-#calculates posterior means for participants
-part_weights <- ParamsAll %>% 
-  mutate(Spatiotopic = ifelse(RF == "Internal", Anatomical*taskInt, Anatomical*taskExt)) %>% 
-  group_by(Participant,RF) %>% 
-  summarise(Anatomical = mean(Anatomical), Spatiotopic = mean(Spatiotopic)) %>% 
-  pivot_longer(names_to = "Condition", values_to = "Weight", cols = c(Anatomical,Spatiotopic)) 
+This code creates intensity plots for each participant, which visually represents the likelihood of each hypothesis. The darker the points represent higher likelihood hypotheses. The light coloured circle represents the maximum likelihood estimate. 
+```{r, MLE_intensity_plots}
+#Creates intensity plots where darker colours indicate more likely weight combinations for each participant
+NormMLE %>%
+  ggplot(aes(wInt,wExt, fill = Condition, alpha=Likelihood))+
+  guides(alpha=FALSE)+
+  geom_tile()+
+  scale_alpha_continuous(range = c(0,1))+
+  xlab('Internal Weight')+ylab('External Weight')+
+  facet_wrap(~Participant, ncol = 5)+
+  geom_point(data = MLE, mapping = aes(x = wInt, y = wExt, color = Condition))+  #this plots the maximum likelihood as a point
+  scale_fill_manual(values = c('black','blue'))+
+  scale_color_manual(values = c('grey', 'light blue'))
 ```
 
-# Overall Data
-```{r overall_PCD}
-#plots overall PCD score separated by condition
-PCD_graph<-PCD_error(alldata1) %>% 
-  ggplot(aes(x=Condition,y=PCD,fill=Condition)) + 
-  geom_bar(stat="identity",position=position_dodge(), color='black', width = 0.5) + 
-  scale_fill_manual(values = c('grey','grey25'))+
-  geom_errorbar(aes(ymin=PCD-SE,ymax=PCD+SE),width=.05)+
-  ylab('PCD Score')+
- # scale_y_continuous(expand = c(0,0), limits = c(0,2))+
-  kaian_theme(base_size = 15)+
-  theme(legend.position = 'none', 
-        axis.text.x = element_blank(), axis.title.x = element_blank(), 
-        panel.grid.major = element_blank(), panel.grid.minor = element_blank())
-
-#plots overall data separated by hand posture and condition
-Pivot_overall(alldata1) %>% 
-  ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, fill = Condition))+
-  geom_errorbar(aes(ymin=Data-SE,ymax=Data+SE),width=.01, linetype = 'solid')+
-  geom_line(size=0.5)+geom_point(size=5, shape=21)+
-  scale_linetype_manual(values = c('dashed','solid'))+
-  scale_fill_manual(values = c("grey", "grey25"))+
-  scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
-  scale_y_continuous(breaks=seq(0,1,0.5))+
-  ylab("Proportion of 'Right-First' Responses")+xlab("SOA (s)")+
-  annotation_custom(ggplotGrob(PCD_graph),xmin=0.15,ymin=-0.03, xmax=0.43, ymax = 0.55)
-```
-
-\newpage 
-# Participant Data
-```{r, data_graphs}
-#plots line graph, with performance separated by hand posture and condition for each participant
-Pivot(alldata1) %>%
-  ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, color = Condition))+
-  geom_line()+
-  scale_linetype_manual(values = c('dashed','solid'))+
-  scale_color_manual(values = c("grey25", "grey"))+
-  scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
-  scale_y_continuous(breaks=seq(0,1,0.5))+
-  ylab('Proportion of Right First Responses')+xlab("SOA (ms)")+
-  facet_wrap(~Participant)
-```
-
-\newpage
-
-# MCMC Output
-
-### 95 CIs
-```{r 95_CI}
-CI <- popParams_Condition %>%  
-  pivot_longer(names_to = "RF", values_to = "Weight", cols = c(Internal,External)) %>% 
-  group_by(Iteration,Condition,RF) %>% 
-  summarise(lowCI = quantile(Weight, 0.025, type = 6),
-            highCI = quantile(Weight, 0.975, type = 6),
-            Weight = mean(Weight)) %>% 
-  group_by(Condition,RF) %>% 
-  summarise(PopWeight = mean(Weight), lowCI = mean(lowCI), highCI = mean(highCI))
-#kable(CI) %>%  kable_styling(c("bordered", "condensed"), full_width = F)
-
-CI_taskParam <- popParamsAll %>% 
-  pivot_longer(names_to = "RF", values_to = "taskParam", cols = c(taskInt,taskExt)) %>% 
-  group_by(Iteration,RF) %>% 
-  summarise(lowCI = quantile(taskParam, 0.025, type = 6),
-            highCI = quantile(taskParam, 0.975, type = 6),
-            taskParam = mean(taskParam)) %>% 
-  group_by(RF) %>% 
-  summarise(taskParam = mean(taskParam), lowCI = mean(lowCI), highCI = mean(highCI))
-#kable(CI_taskParam) %>%  kable_styling(c("bordered", "condensed"), full_width = F)
-
-# sigma <- popParamsAll %>% 
-#   pivot_longer(names_to = "RF", values_to = "Sigma", cols = c(sdInt, sdExt)) %>% 
-#   group_by(Iteration,RF) %>% 
-#   summarise(Sigma = mean(Sigma)) %>% 
-#   group_by(RF) %>% 
-#   summarise(Sigma = mean(Sigma))
-
-```
-
-\newpage 
-
-```{r MCMC_participant_parameters}
-part_weights_wide <- part_weights %>% 
-  pivot_wider(names_from = RF, values_from = Weight)
-
-MCMC_A <- part_weights_wide %>% 
-  ggplot(aes(x=Internal, y=External, fill=Condition))+
+This provides a visualization of how the weights change in response to the changed condition for each participant
+```{r MLE_participant_weights}
+MLE %>% 
+  ggplot(aes(x=wInt, y=wExt, fill=Condition))+
   geom_point(size = 5, shape=21)+
-  geom_path(arrow=arrow(type = 'closed',length = unit(0.3, "cm"), ends = 'last'), 
-            size = 0.5, alpha = 0.3, aes(group=Participant))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  xlim(0,40)+ylim(0,40)+
-  geom_abline(slope=1,intercept=0, linetype = 'dashed')+
-  annotate(geom = 'text', label = 'A', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
+  geom_path(arrow=arrow(type = 'closed',length = unit(0.3, "cm"), ends = 'first'), 
+            size = 0.5, alpha = 0.3, aes(group=Participant), 
+            show.legend = FALSE)+  #hide arrow symbol from legend
+  scale_fill_manual(values = c('black','blue'))+
+  xlim(minWeight,maxWeight)+ylim(minWeight,maxWeight)+
   ylab('External Weight')+xlab("Internal Weight")
-
 ```
 
-```{r, MCMC_actual_vs_predictedPCD, width = 18, height = 7}
-model_PCD <- full_join(Pivot(alldata1), part_weights_wide) %>% 
-  mutate(Hypothesis = genHypothesisMLE(Internal,External,Hands,SOA,Condition), Data = numRF/numTrials) %>% 
-  gather(Type, pRfirst, Data,Hypothesis) %>% 
-  select(-numTrials,-numRF,-Sex) %>% 
+Here we are comparing the weights predicted by the MLE to the true weights used to create the data. This allows us to get a better understanding on whether the model and the MLE are settling near the true weights (a sign the model works). 
+```{r, real_vs_estimated_weights}
+#summarize the true weights of each participant
+trueWeights <- alldata1 %>% 
+  group_by(Participant,Condition) %>% 
+  summarize(wInt = mean(wInt), wExt = mean(wExt), Likelihood = 2) #setting a dummy likelihood to easily group the data in the graph
+
+rbind(trueWeights, MLE) %>% 
+  ggplot(aes(x = wInt, y = wExt))+
+  geom_path(aes(group = Participant), color = 'grey')+
+  geom_point(aes(color = as.character(Likelihood)), size = 2)+
+  xlab("Internal Weight")+ylab("External Weight")+
+  scale_color_manual(values = c('black','grey'), labels = c("Estimated Weight", "True Weight"))+
+  facet_wrap(~Condition)
+```
+- The model does a decent job estimating the participant weights, but reveals two issues:
+- First: the model tends to over-estimates the weights. 
+- Second: the model estimated the weights more accurately in condition A. 
+- Both these factors are likely the result of the requirement to find a slope that works for both the crossed and uncrossed curves, and as performance improves it provides many more weights that can accurately fit the data. 
+
+Another way to see how similar the model output is to the true data, is to look at a measure that wasn't directly measured by the model. Here I have used the PCD score. By calculating the PCD score based on the estimated data and comparing it to the true data we can see how well the model output maps onto the data. 
+```{r, MLE_actual_vs_modelPCD}
+#this calculates a PCD score based on the predicted data and summarizes the participants actual PCD score
+modelPCD <- full_join(Pivot(alldata1), MLE) %>% 
+  mutate(Estimated = genHypothesisMLE(wInt,wExt,Hands,SOA,Condition)) %>% 
+  gather(Type, pRfirst, Data,Estimated) %>% 
+  select(-numTrials,-numRF) %>% 
   spread(key= Hands, pRfirst) %>% 
   group_by(Type,Participant,Condition) %>% 
   mutate(PCD = ifelse(SOA < 0, (Crossed - Uncrossed),(Uncrossed - Crossed))) %>% 
@@ -481,453 +120,14 @@ model_PCD <- full_join(Pivot(alldata1), part_weights_wide) %>%
   spread(key=Type,PCD)
 
 
- #cor.test(model_PCD$Data,model_PCD$Hypothesis)
-
-if(Experiment == "E1"){
-  equation <- expression("y = 0.69x + 0.34, R"^2* "= 0.72")
-}else{
-    equation <- expression("y = 0.58x + 0.59, R"^2* "= 0.65")
-  }
-
-MCMC_B <- model_PCD %>% 
-  ggplot(aes(x=Data, y=Hypothesis))+
-  geom_point(size = 5, shape = 21, aes(fill = Condition))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  xlim(0,3.5)+ylim(0,3.5)+
-  annotate(geom = 'text', label = 'B', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
-  annotate(geom = 'text', label = equation, x=2.5, y=0.4, size=5)+
-  geom_smooth(method = lm, se = FALSE,size=0.5, color='black')+ 
-  #stat_smooth_func(geom="text",method="lm", hjust=-1, parse=TRUE, size=3) +
-  ylab('Predicted PCD')+xlab("Actual PCD")
-```
-
-```{r, population_weights}
-MCMC_C <- full_join(CI, part_weights) %>% 
-  mutate(pop_axis = ifelse(RF == "External", 1,2)) %>% 
-  mutate(part_axis = ifelse(Condition == "Spatiotopic" & RF == "External", 0.9, 
-                         ifelse(Condition == "Spatiotopic" & RF == "Internal", 1.9,
-                         ifelse(Condition == "Anatomical" & RF == "External", 1.1, 2.1)))) %>% 
-  ggplot(aes(x = pop_axis, fill=Condition))+
-  geom_errorbar(aes(ymin=lowCI,ymax=highCI),width=.03)+  
-  geom_path(aes(x = part_axis, y=Weight, group = interaction(Participant,Condition), linetype = Condition),size = 0.6, alpha = 0.1)+
-  geom_point(shape = 21, size=2, aes(x = part_axis, y=Weight, group = Condition))+   
-  geom_path(aes(y=PopWeight, group = Condition, linetype=Condition), size = 1.2)+
-  geom_point(shape=21, size=5, aes(y=PopWeight))+
-  scale_linetype_manual(values = c(2,1), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  scale_x_continuous(limits = c(0.5,2.5), breaks=c(1,2), labels = c("External", "Internal"))+
-  ylim(0,40)+
-  annotate(geom = 'text', label = 'C', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
-  xlab('Reference Frame')+ylab('Reference Frame Weight')+
-  theme(legend.key.width = unit(2,'cm'))
-
-
-
-MCMC_OverallFig <- ggarrange(MCMC_A, MCMC_B, MCMC_C, common.legend = TRUE, legend = 'bottom', ncol=3)
-#OverallFig
-
-ggsave('Figure 13.jpg', MCMC_OverallFig, width = 18, height = 7, dpi=600) #E1 Figure 5; E2 Figure 13
-```
-
-```{r, C_old}
-MCMC_C <- full_join(CI, part_weights) %>% 
-  ggplot(aes(x=RF, fill=Condition))+
-  geom_errorbar(aes(ymin=lowCI,ymax=highCI),width=.03)+  
-  geom_point(shape = 21, size=2, aes(y=Weight), position = position_dodge(width = 0.4))+   
-  geom_path(aes(y=PopWeight, group = Condition, linetype=Condition), alpha = 1)+
-  geom_point(shape=21, size=5, aes(y=PopWeight))+
-  scale_linetype_manual(values = c(1,2))+
-  scale_fill_manual(values = c('grey25','grey'))+
-  ylim(0,40)+
-  annotate(geom = 'text', label = 'C', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
-  xlab('Reference Frame')+ylab('Reference Frame Weight')+
-  theme(legend.key.width = unit(2,'cm'))
-```
-
-\newpage
-
-```{r actual_to_predicted, width = 25, height = 15} 
-#this organizes the data based on the PCD in the Anatomical condition
-PCD_ordered <- PCD(alldata1) %>% 
-  spread(Condition,PCD) %>% 
-  arrange(Anatomical) %>% 
-  mutate(ParticipantNew = 1:length(unique(Participant))) %>% #renumbers the participants so facet label can be replaced
-  gather(Condition,PCD,Anatomical,Spatiotopic) 
-
-#Summarizes the participant data and joins the most likely weights and PCD score for each participant
-data <- full_join(Pivot(alldata1), part_weights_wide) 
-data <- full_join(data,PCD_ordered) %>% 
-  rename(Observed = Data)
-
-#calculates the predicted data based on the participant weights
-MCMC_graph_data <- data %>% 
-  ungroup() %>% 
-  mutate(Expected = genHypothesisMLE(Internal,External,Hands,SOA,Condition)) %>% 
-  gather(Type, pRfirst, Observed,Expected) %>% 
-  nest(-Condition)
-
-LinePlot = list() #empty list to save graph to after each for loop
-for(i in 1:nrow(MCMC_graph_data)){
-  Lines <- MCMC_graph_data %>%
-    filter(Condition == Condition[i]) %>% 
-    unnest() %>% 
-    ggplot(aes(x = SOA, y = pRfirst, group = interaction(Type,Hands), linetype = Hands, shape = Type))+
-    geom_line()+
-    geom_point(size=3)+
-    scale_linetype_manual(values = c('dashed','solid'))+
-    scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
-    scale_y_continuous(breaks=seq(0,1,0.5))+
-    ylab("Proportion of 'Right-First' Responses")+xlab("SOA (s)")+
-    labs(title = paste(MCMC_graph_data$Condition[i], "Response Demand"))+
-    kaian_theme(base_size =  21)+ 
-    theme(panel.spacing = unit(1, "cm")
-)
-LinePlot[[i]] = Lines #saves graph to LinePlot
-}
-
-#calculates the internal and external weight for each participant in each condition
-labels <- data %>%
-  group_by(Condition,ParticipantNew) %>% 
-  summarise(wInt = round(mean(Internal),1), wExt = round(mean(External),1)) 
-
-#labeller functions to present the internal and external weights instead of participant numbers
-som_labeller <- function(variable,value){
-  #for Anatomical condition
-  labels_som <- labels %>% 
-    filter(Condition == "Anatomical") 
-  labels_weights <- paste("I:", labels_som$wInt, "E:", labels_som$wExt)
-  return(labels_weights[value])
-}
-allo_labeller <- function(variable,value){
-  #for Spatiotopic condition
-  labels_allo <- labels %>% 
-    filter(Condition == "Spatiotopic") 
-  labels_weights <- paste("I:", labels_allo$wInt, "E:", labels_allo$wExt)
-  return(labels_weights[value])
-}
-
-#this summarizes the PCD scores in a way to be added onto the graph
-PCD_som <- PCD_ordered %>% 
-  filter(Condition == "Anatomical") %>% 
-  mutate(Hands = 'Crossed', Type='Observed', PCD=round(PCD,1))
-PCD_allo <- PCD_ordered %>% 
-  filter(Condition == "Spatiotopic") %>% 
-  mutate(Hands = 'Crossed', Type='Observed', PCD=round(PCD,1))
-
-#plots the graphs and adds the labels to facet and PCD onto graph
-MCMC_predicted_data<-ggarrange(LinePlot[[1]]+facet_wrap(~ParticipantNew, ncol = 5, labeller = som_labeller)+
-                               geom_text(data = PCD_som, mapping = aes(x=-0.3,y=0.95,label=PCD),
-                                         size=5, show.legend = FALSE),
-                             LinePlot[[2]]+facet_wrap(~ParticipantNew, ncol = 5, labeller = allo_labeller)+
-                               geom_text(data = PCD_allo, mapping = aes(x=-0.3,y=0.95,label=PCD),
-                                         size=5, show.legend = FALSE), 
-                             ncol=2, common.legend = TRUE, legend = 'bottom') #ncol 5 for E1, ncol 8 for E2
-#MCMC_predicted_data
-
-ggsave('Figure 14.jpg',MCMC_predicted_data, width=25,height=25, dpi=600) #20 12 for E1 Figure 6; 30, 17 for exp 2 E2 Figure 14
-```
-
-\newpage
-
-### PPMC
-```{r, PPMC, width = 15, height = 7}
-# This calculates the PCD and correlation value to plot on PPMC graph
-# PCD_overall<-PCD(alldata1) %>% 
-#   group_by(Condition) %>% 
-#   summarize(PCD = mean(PCD)) 
-# 
-# corPCD <- Pivot(alldata1) %>% 
-#   group_by(Participant,Condition) %>% 
-#   select(-c(numTrials,numRF)) %>% 
-#   spread(key=Hands, Data) %>% 
-#   mutate(PCD = ifelse(SOA < 0, (Crossed - Uncrossed),(Uncrossed - Crossed))) %>% 
-#   summarize(PCD = sum(PCD)) %>% 
-#   pivot_wider(names_from = Condition, values_from = PCD) 
-
-if(Experiment == "E1"){
-  mean_PCD = c(1.57,0.995,1.57-0.995)
-}else{
-  mean_PCD = c(1.60, 1.00, 1.60-1.00)
-}
-
-
-PPMC_ordered <- PPMC %>% 
-  pivot_longer(names_to = "PCD", values_to = "value", cols = c(Anatomical:Difference)) 
-PPMC_ordered$PCD <- factor(PPMC_ordered$PCD, levels = c("Difference", "Anatomical", "Spatiotopic"))
-
-PPMC_PCD <- PPMC_ordered %>% 
-  ggplot(aes(x=value, y=..count../sum(count), fill=PCD))+
-  annotate(geom = 'text', label = 'A', x=Inf, y=Inf, hjust = 2, vjust=2, size=7, fontface = 'bold')+
-  ylab("Probability")+xlab("PCD Score")+xlim(0,2)+
-  geom_histogram(binwidth = 0.05, position = 'identity', color='black', alpha=0.8)+
-  scale_fill_manual(values=c('white','grey','grey25'))+
-  geom_vline(xintercept = mean_PCD, color = c('grey25','grey','black'), linetype = 'dashed')+
-  theme(legend.position = c(0, 1), legend.justification = c('left','top'), legend.key.width = unit(0.5,'cm'))
-
-if(Experiment == "E1"){
-  cor_PCD = c(.215)
-}else{
-  cor_PCD = c(.50)
-}
-
-PPMC_Cor <- PPMC %>% 
-  select(Trial, Correlation) %>% 
-  ggplot(aes(x=Correlation, y=..count../sum(count)))+
-  ylab("Probability")+xlab("Correlation")+
-  annotate(geom = 'text', label = 'B', x=Inf, y=Inf, hjust = 2, vjust=2, size=7, fontface = 'bold')+
-  xlim(0,1)+
-  geom_histogram(binwidth = 0.025, position = 'identity', color='black', fill='grey10')+
-  geom_vline(xintercept = cor_PCD, color = 'black', linetype = 'dashed')
-
-PPMC_graph <- grid.arrange(PPMC_PCD, PPMC_Cor, ncol=2)
-#PPMC_graph
-ggsave("Figure 16.jpg", PPMC_graph, width = 15, height = 7, dpi=600) #E1 Figure 8; E2 Figure 16
-```
-
-\newpage
-
-# Maximum Likelihood Estimation Output
-```{r, MLE_intensity_plots}
-labels <- Max_likelihoods %>%
-  group_by(Participant,Condition) %>% 
-  summarise(wInt = round(mean(wInt),1), wExt = round(mean(wExt),1)) %>% 
-  pivot_longer(names_to = "RF", values_to = "weight", cols = c(wInt,wExt)) %>% 
-  unite(Group, Condition:RF) %>% 
-  spread(key = Group, weight)
-
-#labeller functions to present the internal and external weights instead of participant numbers
-labeller_test <- function(variable,value){
-  labels_weights <- paste("Spatiotopic - I:", labels$Spatiotopic_wInt, "E:", labels$Spatiotopic_wExt, "\n Anatomical - I:", labels$Anatomical_wInt, "E:", labels$Anatomical_wExt)
-  return(labels_weights[value])
-}
-
-#Creates intensity plots where darker colours indicate more likely weight combinations for each participant
-OrderedLikelihoods <- full_join(NormMLE, PCD_ordered) %>%
-  ggplot(aes(wInt,wExt, fill = Condition, alpha=Likelihood))+guides(alpha=FALSE)+
-  geom_tile()+
-  scale_alpha_continuous(range = c(0,1))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  xlab('Internal Weight')+ylab('External Weight')+
-  facet_wrap(~ParticipantNew, ncol = 5, labeller = labeller_test)+ #ncol = 5 for E1; 8 for E2
-  geom_abline(slope=1,intercept=0, linetype = 'dashed')+
-  kaian_theme(base_size = 21)+
-  theme(panel.spacing = unit(1, "cm"))+
-  ggsave('Figure 10.jpg', width=20,height=30, dpi=600) #17, 13 for E1 Figure 2; 30, 20 for E2 Figure 10 
-```
-
-
-```{r MLE_participant_weights}
-#Plot showing the weight change for each participant across conditions with an arrow connecting each participant
-MLE_A <- Max_likelihoods %>% 
-  ggplot(aes(x=wInt, y=wExt, fill=Condition))+
-  geom_point(size = 5, shape=21)+
-  geom_path(arrow=arrow(type = 'closed',length = unit(0.3, "cm"), ends = 'first'), 
-            size = 0.5, alpha = 0.3, aes(group=Participant), 
-            show.legend = FALSE)+  #hide arrow symbol from legend
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  xlim(0,40)+ylim(0,40)+
-  geom_abline(slope=1,intercept=0, alpha = 0.5, linetype = 'dashed')+ #draws a diagonal line from the origin with slope of 1
-  annotate(geom = 'text', label = 'A', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
-  ylab('External Weight')+xlab("Internal Weight")
-```
-
-```{r, MLE_actual_vs_modelPCD}
-#this calculates a PCD score based on the predicted data and summarizes the participants actual PCD score
-MLE_model_PCD <- MLE_graph_data %>% 
-  unnest() %>% 
-  select(-numTrials,-numRF) %>% 
-  spread(key= Hands, pRfirst) %>% 
-  group_by(Type,Participant,Sex,Condition) %>% 
-  mutate(PCD = ifelse(SOA < 0, (Crossed - Uncrossed),(Uncrossed - Crossed))) %>% 
-  summarize(PCD = sum(PCD)) %>% 
-  ungroup() %>% 
-  spread(key=Type,PCD)
-
-if(Experiment == "E1"){
-  equation <- expression("y = 0.90x + 0.11, R"^2* "= 0.94")
-}else{
-    equation <- expression("y = 0.84x + 0.26, R"^2* "= 0.89")
-  }
-
-
 #plots participants actual PCD score with their predicted PCD score
-MLE_B <- MLE_model_PCD %>% 
-  ggplot(aes(x=Observed, y=Expected))+
-  geom_point(size = 5, shape = 21, aes(fill = Condition))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  xlim(0,3.5)+ylim(0,3.5)+
-  annotate(geom = 'text', label = 'B', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
-  annotate(geom = 'text', label = equation, x=2.5, y=0.4, size=5)+
-  geom_smooth(method = lm, se = FALSE,size=0.5, color='black')+ 
-  #stat_smooth_func(geom="text",method="lm", hjust=-1, parse=TRUE, size=3) +
-  ylab('Predicted PCD')+xlab("Actual PCD")
+modelPCD %>% 
+  ggplot(aes(x=Data, y=Estimated))+
+  geom_point(size = 3, shape = 21, aes(fill = Condition))+
+  scale_fill_manual(values = c('black','blue'))+
+  xlim(0,5.5)+ylim(0,5.5)+
+  geom_abline(slope = 1, intercept = 0)+
+  ylab('Estimated PCD')+xlab("True PCD")
 ```
+- Here we have the true PCD score on the x-axis and the model estimated PCD on the y-axis. I have plotted a straight line with a slope of 1, going through the origin. The closer the points fall to this line, the more similar the model output to the data. We can see that the model is actually doing a good job at estimating the PCD scores. 
 
-```{r, overall_weights}
-#puts max weights into long format
-MLE_long <- Max_likelihoods %>% 
-  gather(RF,Weight,wInt:wExt) 
-
-#calculates average weights across participants and the standard error of the weights
-overall_weights <- MLE_long %>% 
-  group_by(Condition,RF) %>% 
-  summarize(SE = sd(Weight,na.rm = TRUE)/sqrt(20), PopWeight = mean(Weight)) %>% 
-  ungroup()
-
-MLE_C <- full_join(overall_weights, MLE_long) %>% 
-  mutate(RF = ifelse(RF == 'wInt', "Internal", "External")) %>% 
-  mutate(pop_axis = ifelse(RF == "External", 1,2)) %>% 
-  mutate(part_axis = ifelse(Condition == "Spatiotopic" & RF == "External", 0.9, 
-                         ifelse(Condition == "Spatiotopic" & RF == "Internal", 1.9,
-                         ifelse(Condition == "Anatomical" & RF == "External", 1.1, 2.1)))) %>% 
-  ggplot(aes(x= pop_axis, fill=Condition))+
-  geom_errorbar(aes(ymin=PopWeight-SE,ymax=PopWeight+SE),width=.03)+
-  geom_path(aes(x = part_axis, y=Weight, group = interaction(Participant,Condition), 
-                linetype = Condition),size = 0.6, alpha = 0.1)+
-  geom_point(shape = 21, size=2, aes(x = part_axis, y=Weight, group = Condition))+   
-  geom_path(aes(y=PopWeight, group = Condition, linetype=Condition), size = 1.2)+
-  geom_point(shape=21, size=5, aes(y=PopWeight))+
-  scale_linetype_manual(values = c(2,1), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  scale_x_continuous(limits = c(0.5,2.5), breaks=c(1,2), labels = c("External", "Internal"))+
-  ylim(0,40)+
-  annotate(geom = 'text', label = 'C', x=-Inf, y=Inf, hjust = -2, vjust=2, size=7, fontface = 'bold')+
-  xlab('Reference Frame')+ylab('Reference Frame Weight')+
-  theme(legend.key.width = unit(2,'cm'))
-
-
-MLE_OverallFig <- ggarrange(MLE_A, MLE_B, MLE_C, common.legend = TRUE, legend = 'bottom', ncol=3)
-#OverallFig
-
-ggsave('Figure 11.jpg', MLE_OverallFig, width = 18, height = 7, dpi=600) #E1 Figure 3; E2 Figure 11
-
-```
-
-\newpage
-
-```{r MLE_actual_to_predicted} 
-#this organizes the data based on the PCD in the Anatomical condition
-PCD_ordered <- PCD(alldata1) %>% 
-  spread(Condition,PCD) %>% 
-  arrange(Anatomical) %>% 
-  mutate(ParticipantNew = 1:length(unique(Participant))) %>% #renumbers the participants so facet label can be replaced
-  gather(Condition,PCD,Anatomical,Spatiotopic) 
-
-#Summarizes the participant data and joins the most likely weights and PCD score for each participant
-data <- full_join(Pivot(alldata1), Max_likelihoods) 
-data <- full_join(data,PCD_ordered) %>% 
-  rename(Observed = Data)
-
-#calculates the predicted data based on the participant weights
-MLE_graph_data <- data %>% 
-  mutate(Expected = genHypothesisMLE(wInt,wExt,Hands,SOA)) %>% 
-  gather(Type, pRfirst, Observed,Expected) %>% 
-  ungroup() %>% 
-  nest(-Condition)
-
-
-LinePlot = list() #empty list to save graph to after each for loop
-for(i in 1:nrow(MLE_graph_data)){
-  Lines <- MLE_graph_data %>%
-    filter(Condition == Condition[i]) %>% 
-    unnest() %>% 
-    ggplot(aes(x = SOA, y = pRfirst, group = interaction(Type,Hands), linetype = Hands, shape = Type))+
-    geom_line()+
-    geom_point(size=3)+
-    #scale_shape_manual(values = c(16,2))+
-    scale_linetype_manual(values = c('dashed','solid'))+
-    scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
-    scale_y_continuous(breaks=seq(0,1,0.5))+
-    ylab("Proportion of 'Right-First' Responses")+xlab("SOA (s)")+
-    labs(title = paste(MLE_graph_data$Condition[i], "Response Demand"))+
-    kaian_theme(base_size = 21)+
-    theme(panel.spacing = unit(1, "cm"))
-LinePlot[[i]] = Lines #saves graph to LinePlot
-}
-
-#calculates the internal and external weight for each participant in each condition
-labels <- data %>%
-  group_by(Condition,ParticipantNew) %>% 
-  summarise(wInt = mean(wInt), wExt = mean(wExt)) 
-
-#labeller functions to present the internal and external weights instead of participant numbers
-som_labeller <- function(variable,value){
-  #for Anatomical condition
-  labels_som <- labels %>% 
-    filter(Condition == "Anatomical") 
-  labels_weights <- paste("I:", labels_som$wInt, "E:", labels_som$wExt)
-  return(labels_weights[value])
-}
-allo_labeller <- function(variable,value){
-  #for Spatiotopic condition
-  labels_allo <- labels %>% 
-    filter(Condition == "Spatiotopic") 
-  labels_weights <- paste("I:", labels_allo$wInt, "E:", labels_allo$wExt)
-  return(labels_weights[value])
-}
-
-#this summarizes the PCD scores in a way to be added onto the graph
-PCD_som <- PCD_ordered %>% 
-  filter(Condition == 'Anatomical') %>% 
-  mutate(Hands = 'Crossed', Type='Observed', PCD=round(PCD,1))
-PCD_allo <- PCD_ordered %>% 
-  filter(Condition == 'Spatiotopic') %>% 
-  mutate(Hands = 'Crossed', Type='Observed', PCD=round(PCD,1))
-
-#plots the graphs and adds the labels to facet and PCD onto graph
-MLE_predicted_data<-ggarrange(LinePlot[[1]]+facet_wrap(~ParticipantNew, ncol = 5, labeller = som_labeller)+
-                               geom_text(data = PCD_som, mapping = aes(x=-0.3,y=0.95,label=PCD),
-                                         size=5, show.legend = FALSE),
-                             LinePlot[[2]]+facet_wrap(~ParticipantNew, ncol = 5, labeller = allo_labeller)+
-                               geom_text(data = PCD_allo, mapping = aes(x=-0.3,y=0.95,label=PCD),
-                                         size=5, show.legend = FALSE), 
-                             ncol=2, common.legend = TRUE, legend = 'bottom') #ncol 5 for E1, 8 for E2
-
-#MLE_predicted_data
-ggsave('Figure 12.jpg', MLE_predicted_data, width=25,height=25, dpi=600) #20, 12 for E1 Figure 4, 30, 17 for exp 2 E2 Figure 12
-
-```
-\newpage
-
-# Comparison of MCMC to MLE weights
-```{r, MCMC_vs_Parameter}
-MCMC <- part_weights_wide %>% 
-  mutate(model = 'MCMC') 
-
-Parameterized <- Max_likelihoods %>% 
-  mutate(model = 'MLE')  %>% 
-  select(-Sex,-Likelihood)  %>% 
-  rename(Internal = wInt, External = wExt)
-
-model <- full_join(MCMC, Parameterized) %>% 
-  gather(RF,weight,Internal,External) %>% 
-  spread(key=model,weight)
-
-Int <- model %>% filter(RF == 'Internal')
-cor.test(Int$MCMC, Int$MLE)
-
-Ext <- model %>% filter(RF == 'External')
-cor.test(Ext$MCMC, Ext$MLE)
-
-if(Experiment == "E1"){
-  equation <- data.frame(RF = c('External Weight','Internal Weight'), slope = c('0.52x + 2.98, R\U00B2 = 0.60', '0.58x + 4.14, R\U00B2 = 0.79'))}else{
-    equation <- data.frame(RF = c('External Weight','Internal Weight'), slope = c('0.49x + 3.49, R\U00B2 = 0.60', '0.75x + 2.85, R\U00B2 = 0.87'))
-  }
-
-
-model %>% 
-  mutate( RF = ifelse(RF == 'External','External Weight','Internal Weight')) %>% 
-  ggplot(aes(x=MLE, y=MCMC))+
-  geom_point(size = 5,shape=21, aes(fill=Condition))+
-  scale_fill_manual(values = c('grey','grey25'), labels = c("Anatomical Response Demand", "Spatiotopic Response Demand"))+
-  #geom_text(aes(label=Participant), size =3)+
-  xlim(0,40)+ylim(0,40)+
-  geom_abline(slope=1,intercept=0, linetype = 'dashed', alpha=0.5)+
-  xlab('Participant-Specific Model')+ylab("Hierarchical Model")+
-  geom_smooth(method = lm , se = FALSE, color='black')+
-  geom_text(data = equation, mapping = aes(x=30,y=7,label=slope), size=5, show.legend = FALSE)+
-  #stat_smooth_func(geom="text",method="lm", vjust=5, hjust=0, parse=TRUE, size=3)+ #plots the equation of the regression line onto the graph
-  facet_wrap(~RF)+
-  ggsave("Figure 15.jpg", width = 10, height =6, dpi=600) #E1 Figure 7; E2 Figure 15
-
-```

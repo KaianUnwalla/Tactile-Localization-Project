@@ -1,0 +1,13 @@
+"0","#plots overall data separated by hand posture and condition"
+"0","Pivot_overall(alldata1) %>% "
+"0","  ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, fill = Condition))+"
+"0","  geom_errorbar(aes(ymin=Data-SE,ymax=Data+SE),width=.01, linetype = 'solid')+"
+"0","  geom_line(size=0.5)+geom_point(size=5, shape=21)+"
+"0","  scale_linetype_manual(values = c('dashed','solid'))+"
+"0","  scale_fill_manual(values = c(""grey"", ""grey25""))+"
+"0","  scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+"
+"0","  scale_y_continuous(breaks=seq(0,1,0.5))+"
+"0","  ylab(""Proportion of 'Right-First' Responses"")+xlab(""SOA (s)"")"
+"2","Error in Pivot_overall(alldata1) : 
+  could not find function ""Pivot_overall""
+"

@@ -1,0 +1,16 @@
+"0","#Calculates the normalized likelihood values for each internal and external weight combination"
+"0","NormMLE <- calc.MLE(alldata1, 0, 20, 0.5)"
+"2","`summarise()` regrouping output by 'Participant', 'Condition', 'Hands' (override with `.groups` argument)
+"
+"2","`...` must not be empty for ungrouped data frames.
+Did you want `data = everything()`?"
+"2","`summarise()` regrouping output by 'wInt', 'wExt', 'Participant' (override with `.groups` argument)
+"
+"0","#Calculates the maximum likelihood weight pair"
+"0","MLE <- max.MLE(NormMLE)"
+"2","`summarise()` regrouping output by 'Participant', 'Condition', 'wInt' (override with `.groups` argument)
+"
+"0","if(saveData){"
+"0","  saveRDS(NormMLE, file = paste(path,""NormLikelihoods.rds"", sep=""""), compress = ""xz"")"
+"0","  saveRDS(MLE, file = paste(path,""MaxLikelihoods.rds"", sep=""""), compress = ""xz"")"
+"0","}"

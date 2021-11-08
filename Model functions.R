@@ -13,6 +13,8 @@ Pivot <- function(alldata1){
   return(pivot_full)
 }
 
+
+############# Hierarchical Model Functions 
 log_gaussian_prior <- function(x,mean,sigma){
   #This returns the log value of the probability density function for a normal distribution. 
   #This is equivalent to taking the log value of the dnorm function in R at larger values, but will avoid underflows when values get smaller
@@ -34,14 +36,14 @@ genHypothesis <- function(wInt,wExt,SOA,taskInt,taskExt, numTrialsCondition){
   
   #empty list to be filled with the exponent for the psychometric function
   t <- c() 
-  #allocentric crossed first becase R is alphabetical
-  t[1:length(wInt)] = wInt*taskInt - wExt*taskExt
-  #then allocentric uncrossed
-  t[(length(wInt)+1):(length(wInt)*2)] = wInt*taskInt + wExt*taskExt
-  #then somatotopic crossed
-  t[(length(wInt)*2+1):(length(wInt)*3)] = wInt - wExt
-  #finally somatotopic uncrossed
-  t[(length(wInt)*3+1):(length(wInt)*4)] = wInt + wExt
+  #A crossed first becase R is alphabetical
+  t[1:length(wInt)] = wInt - wExt 
+  #then A uncrossed
+  t[(length(wInt)+1):(length(wInt)*2)] = wInt + wExt
+  #then B crossed
+  t[(length(wInt)*2+1):(length(wInt)*3)] = wInt*taskInt - wExt*taskExt
+  #finally B uncrossed
+  t[(length(wInt)*3+1):(length(wInt)*4)] = wInt*taskInt + wExt*taskExt 
 
   #takes the exponent and SOA and returns the hypothesized probability
   hyp<-function(SOA, t){
@@ -87,21 +89,21 @@ PPMC <- function(PCD_easy, pRfirst){
     summarize(PCD = sum(PCD)) %>%
     spread(key = Condition, PCD)
   
-  som <- calcPPMC$Somatotopic
-  allo <- calcPPMC$Allocentric
+  A <- calcPPMC$A
+  B <- calcPPMC$B
   
-  somPPMC <- mean(som)
-  alloPPMC <- mean(allo)
-  diffPPMC <- mean(allo-som)
-  corPPMC <- cor(som, allo)
-  allPPMC <- c(Somatotopic = somPPMC, Allocentric = alloPPMC, Difference = diffPPMC, Correlation = corPPMC)
+  aPPMC <- mean(A)
+  bPPMC <- mean(B)
+  allPPMC <- c(A = aPPMC, B = bPPMC)
   return(allPPMC)
 }
 
 
+############# Participant Specific Model Functions 
+
 #This code calculates the maximum likelihood estimated weights
 calc.MLE <- function(alldata1, weightMin, weightMax, spacing){
-  #Summarizes the data
+  #Summarizes the data, and nest so that all data fitted into one row
   participant_data<-Pivot(alldata1) %>% nest()
   
   #Selects range of internal and external weights for MLE
@@ -109,37 +111,23 @@ calc.MLE <- function(alldata1, weightMin, weightMax, spacing){
   wExt <- seq(from = weightMin, to = weightMax, by = spacing)
   
   #Calculates likelihood of the data
-  Likelihoods <- tibble(expand.grid(wInt = wInt,wExt = wExt)) %>% #creates tibble with all combinations of internal and external weights
+  Likelihoods <- expand.grid(wInt = wInt,wExt = wExt) %>% #creates tibble with all combinations of internal and external weights
     add_column(participant_data) %>% #adds nested participant data
-    unnest_dt(data) %>% 
+    unnest_dt(data) %>% #this makes sure that all the data is available for each weight combinatin
     mutate(Hypothesis = genHypothesisMLE(wInt,wExt,Hands,SOA), 
            LogLikelihood = compLikelihood(Hypothesis,numTrials,numRF)) %>% 
-    group_by(wInt,wExt,Participant,Sex,Condition) %>% 
-    summarize(LogLikelihood = sum(LogLikelihood))
+    group_by(wInt,wExt,Participant,Condition) %>% 
+    summarize(LogLikelihood = sum(LogLikelihood)) 
   
   
   #Converts the log likelihoods into likelihoods
   Normalized_likelihoods <- Likelihoods %>%
-    group_by(Participant,Sex, Condition) %>%
+    group_by(Participant, Condition) %>%
     mutate(new_LogLikelihood = LogLikelihood - max(LogLikelihood), 
            Likelihood = exp(new_LogLikelihood)) %>%  #finds maximum log likelihood and subtracts it from all, then normalizes
     ungroup()
   
   return(Normalized_likelihoods)
-}
-
-max.MLE <- function(Normalized_likelihoods){
-  #Finds most likely internal and external weight pair
-  Max_likelihoods <- Normalized_likelihoods %>%
-    group_by(Participant,Condition,Sex,wInt,wExt) %>%
-    summarize(Likelihood = mean(Likelihood)) %>%
-    group_by(Participant,Condition) %>%
-    mutate(rank = rank(Likelihood, ties.method = "first")) %>% #sorts by most likely weight pair for each participant and condition. When there is a tie, it takes lowest combined values for internal and external weight
-    filter(rank == max(rank)) %>% 
-    select(Participant,Condition,Sex,wInt,wExt,Likelihood) %>% 
-    ungroup()
-  
-  return(Max_likelihoods)
 }
 
 genHypothesisMLE <- function(wInt,wExt,Hands,SOA,numTrialsCondition){
@@ -154,10 +142,87 @@ genHypothesisMLE <- function(wInt,wExt,Hands,SOA,numTrialsCondition){
   #              the smallest or largest value must be coverted to 1/2 the smallest unit
   #              of measure, which in this case is the trial--> so p(zero) = .5/numTrials.
   
-
+  
   t = ifelse(Hands == 'Crossed', wInt - wExt, wInt + wExt)
   p = (1/(1+exp(SOA*t*-1)))
   p = ifelse(p == 1, 1-(0.5/numTrialsCondition), ifelse(p == 0, 0.5/numTrialsCondition, p))
   return(p)
 }
 
+max.MLE <- function(Normalized_likelihoods){
+  #Finds most likely internal and external weight pair
+  Max_likelihoods <- Normalized_likelihoods %>%
+    group_by(Participant,Condition,wInt,wExt) %>%
+    summarize(Likelihood = mean(Likelihood)) %>%
+    group_by(Participant,Condition) %>%
+    mutate(rank = rank(Likelihood, ties.method = "first")) %>% #sorts by most likely weight pair for each participant and condition. When there is a tie, it takes lowest combined values for internal and external weight
+    filter(rank == max(rank)) %>% 
+    select(Participant,Condition,wInt,wExt,Likelihood) %>% 
+    ungroup()
+  
+  return(Max_likelihoods)
+}
+
+
+############## Data Visualization Functions
+
+kaian_theme <- function(base_size = base_size){
+  theme_minimal(base_size = base_size) %+replace% 
+    theme(legend.title = element_blank(), 
+          panel.border = element_rect(color = 'black', linetype = 'solid', fill=NA), 
+          panel.background = element_rect(color='white'),
+          panel.grid.major = element_line(size = 0.5),
+          panel.grid.minor = element_line(size = 0.25),
+          legend.position = 'bottom', 
+          #legend.position = c(0, 1),
+          #legend.justification = c('left','top'),
+          legend.spacing = unit(0.5,'cm'),
+          legend.key.width = unit(1,'cm'),
+          plot.caption = element_text(hjust=0)
+    )
+}
+
+theme_set(kaian_theme(base_size = 10))
+
+
+Pivot_overall <- function(alldata1){
+  #this takes the raw TOJ data and summarizes it based on the experiment condition and hand posture and SOA. It also calculates morey within-subject error bars
+  pivot_full<-alldata1 %>% 
+    group_by(Participant,Condition,Hands,SOA) %>%
+    summarise(Data = mean(Actual)) %>%
+    ungroup()  %>% 
+    mutate(grand_mean = mean(Data), n = length(unique(Participant))) %>% 
+    group_by(Participant) %>% 
+    mutate(part_mean = mean(Data), norm_mean = Data - part_mean + grand_mean, Length = length(Participant)) %>% 
+    group_by(Condition,Hands,SOA) %>% 
+    summarise(Data = mean(Data), n = mean(n), morey = (var(norm_mean)*mean(Length))/(mean(Length)-1)) %>% 
+    mutate(SE = sqrt(morey)/sqrt(n)) %>% 
+    ungroup()
+  return(pivot_full)
+}
+
+PCD <- function(alldata1){
+  #this calculates the PCD score for each participant
+  pivot_full <- Pivot(alldata1) %>% 
+    group_by(Participant,Condition) %>% 
+    select(Participant,Condition,Hands,SOA,Data) %>% 
+    spread(key=Hands, Data) %>% 
+    mutate(PCD = ifelse(SOA < 0, (Crossed - Uncrossed),(Uncrossed - Crossed))) %>% 
+    summarize(PCD = sum(PCD)) %>% 
+    ungroup()
+  return(pivot_full)
+}
+
+PCD_error <- function(alldata1){
+  #this calculates overall PCD score for each condition, and within-subject morey error bars
+  pivot_full<-alldata1 %>% 
+    PCD() %>% 
+    mutate(grand_mean = mean(PCD), n = length(unique(Participant))) %>%
+    group_by(Participant) %>%
+    mutate(part_mean = mean(PCD), norm_mean = PCD - part_mean + grand_mean, Length = length(Participant)) %>%
+    group_by(Condition) %>% 
+    summarise(PCD = mean(PCD), n = mean(n), morey = (var(norm_mean)*mean(Length))/(mean(Length)-1)) %>% 
+    mutate(SE = sqrt(morey)/sqrt(n)) %>% 
+    ungroup()
+  return(pivot_full)
+}

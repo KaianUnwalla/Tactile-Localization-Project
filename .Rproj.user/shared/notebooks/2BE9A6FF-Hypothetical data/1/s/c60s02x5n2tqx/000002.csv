@@ -1,0 +1,57 @@
+"0","rm(list=ls())"
+"0","library(tidyverse)"
+"2","Registered S3 methods overwritten by 'dbplyr':
+  method         from
+  print.tbl_lazy     
+  print.tbl_sql      
+"
+"2","[30m── [1mAttaching packages[22m ─────────────────────────────────────────────────────────────────────────────── tidyverse 1.3.0 ──[39m
+"
+"2","[30m[32m✓[30m [34mggplot2[30m 3.3.3     [32m✓[30m [34mpurrr  [30m 0.3.4
+[32m✓[30m [34mtibble [30m 3.0.4     [32m✓[30m [34mdplyr  [30m 1.0.2
+[32m✓[30m [34mtidyr  [30m 1.1.2     [32m✓[30m [34mstringr[30m 1.4.0
+[32m✓[30m [34mreadr  [30m 1.4.0     [32m✓[30m [34mforcats[30m 0.5.0[39m
+"
+"2","[30m── [1mConflicts[22m ────────────────────────────────────────────────────────────────────────────────── tidyverse_conflicts() ──
+[31mx[30m [34mdplyr[30m::[32mfilter()[30m masks [34mstats[30m::filter()
+[31mx[30m [34mdplyr[30m::[32mlag()[30m    masks [34mstats[30m::lag()[39m
+"
+"0","library(tictoc)"
+"0","library(kableExtra)"
+"2","
+Attaching package: ‘kableExtra’
+
+"
+"2","The following object is masked from ‘package:dplyr’:
+
+    group_rows
+
+"
+"0","library(gridExtra)"
+"2","
+Attaching package: ‘gridExtra’
+
+"
+"2","The following object is masked from ‘package:dplyr’:
+
+    combine
+
+"
+"0","library(ggpubr)"
+"2","Registered S3 method overwritten by 'data.table':
+  method           from
+  print.data.table     
+"
+"0","devtools::source_gist(""524eade46135f6348140"") #for stat_smooth_func (calculating slope of regression line)"
+"2","Sourcing https://gist.githubusercontent.com/kdauria/524eade46135f6348140/raw/676acaca9a0a144ef320ae2ef00a31c3daa7179d/ggplot_smooth_func.R
+"
+"2","SHA-1 hash of file is c0b163b9fd2d7fe7bd5541e3266d8d36ff3b895d
+"
+"0","source(""Graph functions.R"")"
+"0","source(""Model functions.R"")"
+"0",""
+"0","theme_set(kaian_theme(base_size = 10))"
+"0",""
+"0",""
+"0","time<-format(Sys.time(),""%b%d_%H%M%S"")"
+"0","path = ""Data/"""

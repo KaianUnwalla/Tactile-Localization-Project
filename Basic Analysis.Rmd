@@ -1,5 +1,5 @@
 ---
-title: Hypothetical crossed-hands data
+title: Basic crossed-hands analyses
 author: "Kaian Unwalla"
 date: "November, 2021"
 output:
@@ -8,19 +8,7 @@ output:
   html_document: default
 ---
 
-This code creates hypothetical experiment data. The output file contains 11 columns.
-- Column 1: Participant number. You can change the number of participants through the variable numParticipants. 
-- Column 2: Hands. This takes on two values (crossed and uncrossed). These are the two posture that participants use throughout the experiments
-- Column 3: Condition. Here I have labeled the conditions A and B, and created different values for the two conditions. 
-- Column 4: SOA. This is the time difference between the two tactile vibrations. Negative indicates the vibration was presented to the left hand first. The task is easier at longer SOAs. Here I have used 6 values (± 0.4s, ± 0.2s, ± 0.05s)
-- Column 5: Trial. This determines the number of trials a participant sees in each hand posture by condition by SOA. I have set this to 30 as this would be a standard 1 hour experiment
-- Column 6: wInt. This is the weight placed on internal information.
-- Column 7: wExt. This is the weight placed on external information. wInt + wExt determines the slope of the uncrossed line.The slope of the crossed line is determined by wInt - wExt. 
-- Column 8: taskInt. This is the change in the internal information for condition B. An increase in the internal information would predict better crossed and uncrossed performance. 
-- Column 9: taskExt. This is the change in external information for condition B. An increase in the external information would predict better uncrossed performance but worse crossed performance. 
-- Column 10: p. This is the hypothesized probability of answering right-hand first determined by the logistic equation. 
-- Column 11: Actual. I used a binomial equation with p to decide whether the participant answered 'right hand' on each trial (1 indicates right-first, 0 indicates left-first)
-
+This code first summarizes the raw data, provides a couple different ways to visualize the summarized data, and finally conducts some frequentist statistics on the crossed-hands data. 
 
 ```{r global_options, include=FALSE}
 knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align = 'center', fig.path='Figs/',
@@ -30,77 +18,51 @@ knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align = 'center', fig.path
 ```{r, libraries}
 rm(list=ls())
 library(tidyverse)
-library(tictoc)
-library(kableExtra)
-library(gridExtra)
-library(ggpubr)
-devtools::source_gist("524eade46135f6348140") #for stat_smooth_func (calculating slope of regression line)
+library(rstatix)
 
-source("Graph functions.R")
 source("Model functions.R")
-
-theme_set(kaian_theme(base_size = 10))
-
 
 time<-format(Sys.time(),"%b%d_%H%M%S")
 path = "Data/"
+
+alldata1 <- read.table(paste(path,"Test Data.txt", sep = ""), header = T)
 ```
 
-```{r, create_hypothetical_crossed-hands_data}
-#Choose values of parameters
-numParticipants = 20
-SOA <- c(-0.4,-0.2,-0.05,0.05,0.2,0.4)
-numTrials <- 30
+```{r get_data}
+#This function serves as a pivot table and calculates the mean of the the proportion right-first responses, based on the condition, hand posture, and SOA.
+overall_lines <- Pivot_overall(alldata1) 
 
-#Can change the mean weight and sd for the participants
-wInt = 10
-wExt = 7
-sdInt = 1
-sdExt = 1
+#This uses the pivot function which does the same thing as pivot_overall, but calculates it separately for each participant. 
+indiv_lines <- Pivot(alldata1) %>% 
+  select(-c(numTrials,numRF))
 
-#Choose how much of a change should be expected for each condition. 1 indicates this value will not change across conditions
-taskInt = 1
-taskExt = 1.5
-sdtaskInt = 0.3
-sdtaskExt = 0.3
+#Another analysis often conducted on crossed-hands data is the proportion correct difference (PCD) score. This score takes the difference between participants' crossed and uncrossed performance at each SOA and sums them together. This results in a single number that essentially indexes the accuracy cost for crossing the hands. A larger score indicates worse performance (larger crossed-hands deficit)
+overall_PCD <- PCD_error(alldata1) 
 
-#Creates the participant data. This first creates the dataframe with all the rows. Then selects weight parameters for each participant, and then calculates the hypothesis based on those chosen parameters. 
-alldata1 <- expand.grid(Participant = c(1:numParticipants),
-                  Hands = c('Crossed','Uncrossed'),
-                  Condition = c('A','B'),
-                  SOA = SOA,
-                  Trial = c(1:numTrials)) %>% 
-  nest(data = -c(Participant)) %>% 
-  mutate(wInt = rnorm(numParticipants, wInt, sdInt), wExt = rnorm(numParticipants, wExt, sdExt),
-         taskInt = rnorm(1, taskInt, sdtaskInt), taskExt = rnorm(1, taskExt, sdtaskExt)) %>% 
-  unnest(cols = c(data)) %>% 
-  mutate(wInt = ifelse(Condition == "A", wInt, wInt*taskInt), wExt = ifelse(Condition == "A", wExt, wExt*taskExt),
-         p = genHypothesisMLE(wInt, wExt, Hands, SOA, numTrials))
-alldata1$Actual <-  rbinom(nrow(alldata1),1,alldata1$p)
-
-  
-#save the created participant data
-write.table(alldata1, paste(path,"Raw Data ",time,".txt", sep = ""), sep = '\t', row.names = F, col.names = T)
+#This uses the PCD function which does the same thing as PCD_error, but calculates it separately for each participant.
+indiv_PCD <- PCD(alldata1) 
 ```
 
-You can use this code here to create an overall graph of participant performance. You can change the values of wInt, wExt, taskInt, taskExt and then see how it changes overall performance
+## Graphs
+This code creates an overall graph of participant performance. 
 ```{r overall_graph}
 #plots overall data separated by hand posture and condition
-Pivot_overall(alldata1) %>% 
+overall_lines %>% 
   ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, fill = Condition))+
   geom_errorbar(aes(ymin=Data-SE,ymax=Data+SE),width=.01, linetype = 'solid')+
-  geom_line(size=0.5)+geom_point(size=5, shape=21)+
+  geom_line(size=0.5)+geom_point(size=3, shape=21)+
   scale_linetype_manual(values = c('dashed','solid'))+
-  scale_fill_manual(values = c("grey", "grey25"))+
+  scale_fill_manual(values = c("grey25", "grey"))+
   scale_x_continuous(breaks=seq(-0.4,0.4,0.4))+
   scale_y_continuous(breaks=seq(0,1,0.5))+
   ylab("Proportion of 'Right-First' Responses")+xlab("SOA (s)")
 ```
+- You can see that performance is almost equivalent across the two conditions when the hands are uncrossed. When the hands are crossed, participants are performing slightly better in condition A, and close to chance in condition B. 
 
-This code here plots the individual participants, so you can see what is happening for each participant separately
+This code here plots the individual participants, so you can see what is happening for each participant separately. 
 ```{r, data_graphs}
 #plots line graph, with performance separated by hand posture and condition for each participant
-Pivot(alldata1) %>%
+indiv_lines %>%
   ggplot(aes(x = SOA, y = Data, group = interaction(Condition,Hands), linetype = Hands, color = Condition))+
   geom_line()+
   scale_linetype_manual(values = c('dashed','solid'))+
@@ -110,4 +72,48 @@ Pivot(alldata1) %>%
   ylab('Proportion of Right First Responses')+xlab("SOA (ms)")+
   facet_wrap(~Participant)
 ```
+
+This plots the overall PCD score for each condition. 
+```{r overall_PCD, fig.width=4, fig.height=5, include=T}
+overall_PCD %>% 
+  ggplot(aes(x=Condition,y=PCD,fill=Condition)) + 
+  geom_bar(stat="identity",position=position_dodge(), width = 0.5) + 
+  scale_fill_manual(values = c('grey25','grey'))+
+  geom_errorbar(aes(ymin=PCD-SE,ymax=PCD+SE),width=.05)+
+  ylab('PCD Score')  
+```
+- You can see that condition A has a smaller PCD score than condition B. This supports what we see in the individual line graphs where there is a smaller separation between the uncrossed and crossed lines for condition A compared to condition B. 
+
+
+This code here plots the individual participants' PCD scores, so you can see what is happening for each participant separately. 
+```{r individual_PCD, include=T}
+indiv_PCD %>% 
+  ggplot(aes(x=Condition ,y=PCD, fill = Condition)) + 
+  scale_fill_manual(values = c('grey25','grey'))+
+  geom_bar(stat='identity', position = position_dodge(),width = 0.8)+
+  facet_wrap(~Participant)
+```
+
+
+##Stats
+```{r, include=TRUE}
+#convert participant and SOA to factors for the ANOVA 
+indiv_lines$Participant <- factor(indiv_lines$Participant)
+indiv_lines$SOA <- factor(indiv_lines$SOA)
+
+#calculate anova using anova_test from rstatix package
+indiv_aov <- anova_test(data = indiv_lines, dv = Data, wid = Participant, within = c(Condition,Hands,SOA))
+get_anova_table(indiv_aov)
+```
+- Based on the results of the anova we can see a significant effect of SOA, suggesting that performance changes as the time difference between the two vibrations changes.
+- There is also an interaction between condition and SOA, showing that the change in SOA is different for condition A and B
+- There is also an interaction between hand posture and SOA, showing that the change in SOA is different when the hands are crossed and uncrossed. This indicates that participants are performing worse when their hands are crossed. 
+- The interaction of interest is the significant interaction between condition, hand, and SOA. This suggests that the worse performance seen when the hands are crossed is different for condition A and condition B. 
+
+A simpler statistic is to simply do a t-test on the PCD scores to see whether there is a change in the magnitude based on the condition. 
+```{r, order_anova, include=T}
+indiv_PCD$Participant <- factor(indiv_PCD$Participant)
+t.test(PCD~Condition, data = indiv_PCD)
+```
+- Based on the data it is evident that condition B has a smaller PCD score, and therefore a smaller crossed-hands deficit. This suggests that the manipulation used for condition B helped reduce the conflict between internal and external information and improved tactile localization. 
 

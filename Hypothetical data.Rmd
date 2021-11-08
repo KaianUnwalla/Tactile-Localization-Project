@@ -30,20 +30,14 @@ knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.align = 'center', fig.path
 ```{r, libraries}
 rm(list=ls())
 library(tidyverse)
-library(tictoc)
-library(kableExtra)
-library(gridExtra)
-library(ggpubr)
-devtools::source_gist("524eade46135f6348140") #for stat_smooth_func (calculating slope of regression line)
 
-source("Graph functions.R")
 source("Model functions.R")
-
-theme_set(kaian_theme(base_size = 10))
-
 
 time<-format(Sys.time(),"%b%d_%H%M%S")
 path = "Data/"
+
+#Turn this on if you want to save the hypothetial data you create. 
+saveData = FALSE
 ```
 
 ```{r, create_hypothetical_crossed-hands_data}
@@ -78,9 +72,11 @@ alldata1 <- expand.grid(Participant = c(1:numParticipants),
          p = genHypothesisMLE(wInt, wExt, Hands, SOA, numTrials))
 alldata1$Actual <-  rbinom(nrow(alldata1),1,alldata1$p)
 
-  
+
 #save the created participant data
-write.table(alldata1, paste(path,"Raw Data ",time,".txt", sep = ""), sep = '\t', row.names = F, col.names = T)
+if(saveData){
+  write.table(alldata1, paste(path,"Raw Data ",time,".txt", sep = ""), sep = '\t', row.names = F, col.names = T)
+}
 ```
 
 You can use this code here to create an overall graph of participant performance. You can change the values of wInt, wExt, taskInt, taskExt and then see how it changes overall performance
